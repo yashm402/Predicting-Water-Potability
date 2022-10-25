@@ -1,0 +1,164 @@
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(knitr)
+library(rpart)
+library(rpart.plot)
+library(ROCR)
+library(randomForest)
+library(ggpubr)
+```
+## Research question:
+-Can chloramines, pH, and sulfate be significant predictors for water potability in a given water sample?
+
+-Null hypothesis: chloramines, pH, and sulfate are not significant predictors of water potability.
+
+-Independent variable: Chloramines, Sulfate, pH
+-Dependent variable: Potability (binary: 1= potable, 0= non-potable)
+
+## Method that will be explored: 
+- High dimensionality method:  
+    - decision tree
+- ROC curve
+- Clustering?
+
+## Data source:
+- Data for this project is the "water quality" data set, which is accessible via Kaggle. This data set contains 3276 observations with 10 variables: pH value, Hardness, Solids, Chloramines, Sulfate, Conductivity, Organic Carbon, Trihalomethanes, Turbidity, and Potability.  After dropping "NA" values, the dataset contains 2011 observations.   
+
+- Assumptions: for the purposes of this project, we assume that the data is independent samples, as we do not have the names or locations from where the samples were drawn. 
+
+
+## Data exploration:
+```{r}
+d<-read.csv("water_potability.csv")
+df <- d %>% drop_na()
+
+#head(df)
+
+summary(df)
+
+#based on background research: chloramines, sulfate, and pH are important factors for water potability. graphing these:
+
+ggplot(df, aes(ph))+ geom_histogram()+ theme_bw() + facet_wrap(~Potability) + labs(title= "Density of pH values", subtitle= "In nonpotable and potable water samples") 
+ggplot(df, aes(Sulfate))+ geom_histogram()+ theme_bw() + facet_wrap(~Potability) + labs(title= "Density of Sulfate", subtitle= "In nonpotable and potable water samples") 
+ggplot(df, aes(Chloramines)) + geom_histogram()+ theme_bw() + facet_wrap(~Potability) + labs(title= "Density of Chloramines", subtitle= "In nonpotable and potable water samples")
+```
+
+## Are the variables of interest(pH, Chloramines, and Sulfate) normally distributed?
+
+##Questions: since data is visually normal, is a t.test appropriate? or does each parameter need to be tested separately?  or is another test more useful here? 
+```{r}
+#qqplots to check for normalcy:  
+ggqqplot(df$ph-df$Potability)
+ggqqplot(df$Chloramines-df$Potability)
+ggqqplot(df$Sulfate-df$Potability)
+ggqqplot(df$Sulfate)
+ggqqplot(df$Chloramines)
+ggqqplot(df$ph)
+
+#interpretation: variables seem to fit normalcy, except at the tails of the confidence interval?
+
+t.test(df$ph-df$Potability)
+t.test(df$Chloramines-df$Potability)
+t.test(df$Sulfate-df$Potability)
+t.test(df$Sulfate)
+```
+
+## Model the data for prediction:
+Decision tree: classification trees are used when the dependent variable is categorical(e.g. potability, method= "class") and regression trees are used when the dependent variable is continuous (not this case, method= "anova"). 
+
+Minsplit: Minimum number of observations in a node be 30 before attempting a split
+cp: A split must decrease the overall lack of fit by a factor of 0.01 (cost complexity factor) before being attempted. a smaller cp results in a more sensitive model prone to "overfitting" 
+
+Questions:
+#why is this only working with anova and not "class"? our dependent variable is categorical, so method should be "class".
+#what about a training set for this model? how is the dataset used in the model different than "newdata" in performance part?
+
+```{r}
+#model 1:
+mymodel<- rpart(Potability~., data=df, method="anova", control=rpart.control(minsplit=10, cp=0.008)) 
+rpart.plot(mymodel)
+
+#"prune tree": select complexity parameter associated with the smallest cross-validated error 
+printcp(mymodel)
+mymodel$cptable[which.min(mymodel$cptable[,"xerror"]),"CP"]
+prune_mymodel<- prune(mymodel,cp=mymodel$cptable[which.min(mymodel$cptable[,"xerror"]),"CP"])
+rpart.plot(prune_mymodel)
+plotcp(mymodel)
+
+#analyze performance on dataset:
+v<- predict(mymodel, newdata=df)
+hist(v)
+myprediction<-ifelse(v >.6, 1, 0) 
+#based on histogram: if above 60% probability for potability, we will assume that the water is potable, else we will assume non-potable water
+
+#confusion matrix:
+addmargins(table(df$Potability, myprediction))
+#false negative: our model predicts 87 potable samples when it is actually not potable (very bad!)
+#false positive: our model predicts 577 non-potable samples when they are actually potable (bad, but not as terrible)
+
+#look at "performance" function:
+pred <- prediction(predict(mymodel), df$Potability)
+
+#ROC curve: research this as well
+plot(performance(pred, "tpr", "fpr"))
+abline(0, 1, lty = 2)
+
+
+#accuracy across cut offs (thresholds)
+plot(performance(pred, "acc"))
+#the model would perform nearly as accurate if we reduced the threshold from 60% to 40%
+
+```
+
+
+```{r}
+#model 2: cp value changes to .01, then model is pruned to select the complexity parameter associated with the smallest cross-validated error, cp= 0.01312593
+
+mymodel2<-rpart(Potability~., data=df, method= "anova", control=rpart.control(minsplit=10, cp=.01)) 
+rpart.plot(mymodel2)
+printcp(mymodel2)
+
+#select complexity parameter associated with the smallest cross-validated error 
+mymodel2$cptable[which.min(mymodel2$cptable[,"xerror"]),"CP"]
+#=0.01312593
+
+prune_mymodel2<- prune(mymodel2, cp=mymodel2$cptable[which.min(mymodel2$cptable[,"xerror"]),"CP"])
+rpart.plot(prune_mymodel2)
+
+plotcp(mymodel2)
+#summary(mymodel2)
+#interpretation:
+
+x<- predict(mymodel2, newdata=df)
+hist(x)
+myprediction2<- ifelse(x>.5,1,0)
+
+#look at confusion matrix
+addmargins(table(df$Potability, myprediction2))
+#false negative: our model2 predicts 59 potable samples when actually not potable 
+#false positive: our model predicts 650 non-potable samples when they are actually potable
+
+pred2 <- prediction(predict(mymodel2), df$Potability)
+
+
+#ROC curve
+plot(performance(pred2, "tpr", "fpr"))
+abline(0, 1, lty = 2)
+#accuracy across cut offs (thresholds)
+plot(performance(pred2, "acc"))
+```
+
+
+
+https://developers.google.com/machine-learning/crash-course/classification/precision-and-recall
+
+https://developers.google.com/machine-learning/crash-course/classification/accuracy
+
+https://developers.google.com/machine-learning/crash-course/classification/true-false-positive-negative
+
+https://stat.ethz.ch/R-manual/R-devel/library/rpart/html/rpart.control.html
